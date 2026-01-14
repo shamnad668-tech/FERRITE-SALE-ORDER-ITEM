@@ -6,9 +6,31 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-# --- HELPER FUNCTIONS ---
+# --- 1. PASSWORD PROTECTION ---
+def check_password():
+    """Returns True if the user had the correct password."""
+    def password_entered():
+        if st.session_state["password"] == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.title("Ferrite Agencies - Login")
+        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.title("Ferrite Agencies - Login")
+        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        return True
+
+# --- 2. DATA PROCESSING HELPER ---
 def extract_quantities(value):
     if pd.isna(value): 
         return 0.0, 0.0
@@ -27,122 +49,110 @@ def extract_quantities(value):
         except:
             return 0.0, 0.0
 
-# --- PAGE CONFIG ---
+# --- 3. MAIN APPLICATION ---
 st.set_page_config(page_title="Ferrite Agencies", page_icon="📦")
 
-st.title("Ferrite Agencies")
-st.subheader("Order Report System")
+if check_password():
+    st.title("Ferrite Agencies")
+    st.subheader("Order Report System")
 
-uploaded_file = st.file_uploader("Choose Excel File", type=['xlsx'])
+    uploaded_file = st.file_uploader("Choose Excel File", type=['xlsx'])
 
-if uploaded_file:
-    try:
-        df = pd.read_excel(uploaded_file, sheet_name='Item Details', usecols="D,G,H,K,L")
-        df.columns = ['Item Name', 'Category', 'MRP', 'Raw_Qty', 'Unit']
+    if uploaded_file:
+        try:
+            # Load Data (D=Item, G=Category, H=MRP, K=Qty, L=Unit)
+            df = pd.read_excel(uploaded_file, sheet_name='Item Details', usecols="D,G,H,K,L")
+            df.columns = ['Item Name', 'Category', 'MRP', 'Raw_Qty', 'Unit']
 
-        qty_data = df['Raw_Qty'].apply(extract_quantities)
-        df['Quantity'] = qty_data.apply(lambda x: x[0])
-        df['Free_Quantity'] = qty_data.apply(lambda x: x[1])
-        
-        df['MRP'] = pd.to_numeric(df['MRP'], errors='coerce').fillna(0)
-        df['Unit'] = df['Unit'].fillna("-").astype(str).str.strip()
-        df['Category'] = df['Category'].fillna("Uncategorized").astype(str).str.strip()
-        
-        df = df.groupby(['Category', 'Item Name', 'Unit'], as_index=False).agg({
-            'Quantity': 'sum',
-            'Free_Quantity': 'sum',
-            'MRP': 'first'
-        }).sort_values(by=['Category', 'Item Name'])
-
-        # --- PDF GENERATION ---
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=30)
-        elements = []
-        styles = getSampleStyleSheet()
-        
-        # FIXED STYLES TO PREVENT OVERLAP
-        title_style = ParagraphStyle(
-            'Title', 
-            fontSize=28, 
-            alignment=TA_CENTER, 
-            fontName='Helvetica-Bold', 
-            leading=34,       
-            spaceAfter=12     
-        )
-        
-        sub_title_style = ParagraphStyle(
-            'Sub', 
-            fontSize=18, 
-            alignment=TA_CENTER, 
-            textColor=colors.grey, 
-            leading=22, 
-            spaceAfter=20
-        )
-        
-        cell_style = ParagraphStyle('Cell', fontSize=9, leading=11, alignment=TA_LEFT)
-        
-        # --- CORRECT TIME FOR INDIA (IST) ---
-        # Adjusting for UTC to IST (+5 hours 30 minutes)
-        ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
-        
-        # Add Header
-        elements.append(Paragraph("Ferrite Agencies", title_style))
-        elements.append(Paragraph("Order Report", sub_title_style))
-        elements.append(Paragraph(f"Generated on: {ist_time.strftime('%d-%m-%Y %I:%M %p')}", styles['Normal']))
-        elements.append(Spacer(1, 20))
-        
-        # Table Data
-        table_data = [['MRP', 'CATEGORY', 'ITEM NAME', 'UNIT', 'QTY', 'FREE QTY']]
-        t_qty, t_free = 0, 0
-        
-        for _, row in df.iterrows():
-            t_qty += row['Quantity']
-            t_free += row['Free_Quantity']
+            # Process Quantities
+            qty_data = df['Raw_Qty'].apply(extract_quantities)
+            df['Quantity'] = qty_data.apply(lambda x: x[0])
+            df['Free_Quantity'] = qty_data.apply(lambda x: x[1])
             
-            mrp_disp = f"{row['MRP']:.2f}" if row['MRP'] != 0 else ""
-            qty_disp = int(row['Quantity']) if row['Quantity'].is_integer() else f"{row['Quantity']:.2f}"
-            free_disp = int(row['Free_Quantity']) if row['Free_Quantity'] > 0 else ""
+            df['MRP'] = pd.to_numeric(df['MRP'], errors='coerce').fillna(0)
+            df['Unit'] = df['Unit'].fillna("-").astype(str).str.strip()
+            df['Category'] = df['Category'].fillna("Uncategorized").astype(str).str.strip()
             
-            table_data.append([
-                mrp_disp,
-                Paragraph(row['Category'], cell_style),
-                Paragraph(row['Item Name'], cell_style),
-                row['Unit'],
-                qty_disp,
-                free_disp
-            ])
-            
-        table_data.append(['', '', Paragraph('TOTAL ITEMS', cell_style), '', 
-                           int(t_qty) if t_qty.is_integer() else t_qty, 
-                           int(t_free) if t_free.is_integer() else t_free])
-        
-        # FIXED COLUMN WIDTHS & ALIGNMENT
-        t = Table(table_data, colWidths=[50, 85, 185, 65, 45, 55], repeatRows=1)
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2c3e50")), 
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), 
-            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,0), 9),
-            ('TOPPADDING', (0,0), (-1,-1), 6),    
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-            ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.whitesmoke, colors.white]),
-            ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
-            ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
-        ]))
-        
-        elements.append(t)
-        doc.build(elements)
-        
-        st.success(f"PDF Generated Successfully at {ist_time.strftime('%I:%M %p')} IST!")
-        st.download_button(
-            label="📩 DOWNLOAD FINAL PDF REPORT",
-            data=buffer.getvalue(),
-            file_name=f"Ferrite_Order_{ist_time.strftime('%H%M%S')}.pdf",
-            mime="application/pdf"
-        )
+            # Grouping & Sorting
+            df = df.groupby(['Category', 'Item Name', 'Unit'], as_index=False).agg({
+                'Quantity': 'sum',
+                'Free_Quantity': 'sum',
+                'MRP': 'first'
+            }).sort_values(by=['Category', 'Item Name'])
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+            # PDF Setup
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=30)
+            elements = []
+            styles = getSampleStyleSheet()
+            
+            # PDF Styles
+            title_style = ParagraphStyle('Title', fontSize=28, alignment=TA_CENTER, fontName='Helvetica-Bold', leading=34, spaceAfter=14)
+            sub_title_style = ParagraphStyle('Sub', fontSize=18, alignment=TA_CENTER, textColor=colors.grey, leading=22, spaceAfter=22)
+            cell_style = ParagraphStyle('Cell', fontSize=9, leading=11, alignment=TA_LEFT)
+            
+            # IST Time Calculation
+            utc_now = datetime.now(timezone.utc)
+            ist_now = utc_now + timedelta(hours=5, minutes=30)
+            
+            # Report Header
+            elements.append(Paragraph("Ferrite Agencies", title_style))
+            elements.append(Paragraph("Order Report", sub_title_style))
+            elements.append(Paragraph(f"Generated on: {ist_now.strftime('%d-%m-%Y %I:%M %p')}", styles['Normal']))
+            elements.append(Spacer(1, 25))
+            
+            # Table Header
+            table_data = [['MRP', 'CATEGORY', 'ITEM NAME', 'UNIT', 'QTY', 'FREE QTY']]
+            t_qty, t_free = 0, 0
+            
+            # Rows
+            for _, row in df.iterrows():
+                t_qty += row['Quantity']
+                t_free += row['Free_Quantity']
+                mrp_disp = f"{row['MRP']:.2f}" if row['MRP'] != 0 else ""
+                qty_disp = int(row['Quantity']) if row['Quantity'].is_integer() else f"{row['Quantity']:.2f}"
+                free_disp = int(row['Free_Quantity']) if row['Free_Quantity'] > 0 else ""
+                
+                table_data.append([
+                    mrp_disp,
+                    Paragraph(row['Category'], cell_style),
+                    Paragraph(row['Item Name'], cell_style),
+                    row['Unit'],
+                    qty_disp,
+                    free_disp
+                ])
+                
+            # Totals
+            table_data.append(['', '', Paragraph('TOTAL ITEMS', cell_style), '', 
+                               int(t_qty) if t_qty.is_integer() else t_qty, 
+                               int(t_free) if t_free.is_integer() else t_free])
+            
+            # Table Alignment & Colors
+            t = Table(table_data, colWidths=[50, 85, 185, 65, 45, 55], repeatRows=1)
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2c3e50")), 
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), 
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('TOPPADDING', (0,0), (-1,-1), 6),    
+                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+                ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.whitesmoke, colors.white]),
+                ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+                ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
+            ]))
+            
+            elements.append(t)
+            doc.build(elements)
+            
+            st.success(f"Report for {ist_now.strftime('%d-%m-%Y')} ready!")
+            st.download_button(
+                label="📩 DOWNLOAD REPORT",
+                data=buffer.getvalue(),
+                file_name=f"Ferrite_Order_{ist_now.strftime('%H%M%S')}.pdf",
+                mime="application/pdf"
+            )
+
+        except Exception as e:
+            st.error(f"Something went wrong with the file: {e}")
