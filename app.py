@@ -10,6 +10,7 @@ from datetime import datetime
 
 # --- HELPER FUNCTIONS ---
 def extract_quantities(value):
+    """Splits '10+2' into (10.0, 2.0)"""
     if pd.isna(value): 
         return 0.0, 0.0
     val_str = str(value).strip()
@@ -27,19 +28,29 @@ def extract_quantities(value):
         except:
             return 0.0, 0.0
 
-# --- UI SETUP ---
-st.set_page_config(page_title="Ferrite Agencies Report", layout="centered")
-st.title("📦 Ferrite Agencies")
-st.subheader("Order Report Generator")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Ferrite Agencies", page_icon="📦")
 
-uploaded_file = st.file_uploader("Upload your Excel file", type=['xlsx'])
+# --- UI STYLING ---
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stButton>button { width: 100%; background-color: #2c3e50; color: white; height: 3em; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
-if uploaded_file is not None:
+st.title("Ferrite Agencies")
+st.subheader("Order Report System")
+
+uploaded_file = st.file_uploader("Choose Excel File", type=['xlsx'])
+
+if uploaded_file:
     try:
-        # 1. Process Excel
+        # 1. LOAD DATA
         df = pd.read_excel(uploaded_file, sheet_name='Item Details', usecols="D,G,H,K,L")
         df.columns = ['Item Name', 'Category', 'MRP', 'Raw_Qty', 'Unit']
 
+        # 2. PROCESS DATA
         qty_data = df['Raw_Qty'].apply(extract_quantities)
         df['Quantity'] = qty_data.apply(lambda x: x[0])
         df['Free_Quantity'] = qty_data.apply(lambda x: x[1])
@@ -48,62 +59,82 @@ if uploaded_file is not None:
         df['Unit'] = df['Unit'].fillna("-").astype(str).str.strip()
         df['Category'] = df['Category'].fillna("Uncategorized").astype(str).str.strip()
         
+        # Group and Sort
         df = df.groupby(['Category', 'Item Name', 'Unit'], as_index=False).agg({
             'Quantity': 'sum',
             'Free_Quantity': 'sum',
             'MRP': 'first'
         }).sort_values(by=['Category', 'Item Name'])
 
-        # 2. Generate PDF in Memory
+        # 3. GENERATE PDF (Exact Desktop Match)
         buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
         elements = []
         styles = getSampleStyleSheet()
         
-        cell_style = ParagraphStyle('CellStyle', parent=styles['Normal'], fontSize=9, leading=11)
-        title_style = ParagraphStyle('T', fontSize=24, alignment=TA_CENTER)
+        # Styles
+        title_style = ParagraphStyle('Title', fontSize=24, alignment=TA_CENTER, fontName='Helvetica-Bold', spaceAfter=5)
+        sub_title_style = ParagraphStyle('Sub', fontSize=16, alignment=TA_CENTER, textColor=colors.grey, spaceAfter=20)
+        cell_style = ParagraphStyle('Cell', fontSize=9, leading=11, alignment=TA_LEFT)
         
+        # Header
         elements.append(Paragraph("Ferrite Agencies", title_style))
-        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%d-%m-%Y %I:%M %p')}", styles['Normal']))
+        elements.append(Paragraph("Order Report", sub_title_style))
+        elements.append(Paragraph(f"Generated on: {datetime.now().strftime('%d-%m-%Y %I:%M %p')}", styles['Normal']))
         elements.append(Spacer(1, 15))
         
+        # Table Data
         table_data = [['MRP', 'CATEGORY', 'ITEM NAME', 'UNIT', 'QTY', 'FREE QTY']]
-        total_qty = df['Quantity'].sum()
-        total_free = df['Free_Quantity'].sum()
+        t_qty, t_free = 0, 0
         
         for _, row in df.iterrows():
+            t_qty += row['Quantity']
+            t_free += row['Free_Quantity']
+            
             mrp_disp = f"{row['MRP']:.2f}" if row['MRP'] != 0 else ""
+            qty_disp = int(row['Quantity']) if row['Quantity'].is_integer() else f"{row['Quantity']:.2f}"
+            free_disp = int(row['Free_Quantity']) if row['Free_Quantity'] > 0 else ""
+            
             table_data.append([
                 mrp_disp,
                 Paragraph(row['Category'], cell_style),
                 Paragraph(row['Item Name'], cell_style),
                 row['Unit'],
-                int(row['Quantity']) if row['Quantity'].is_integer() else row['Quantity'],
-                int(row['Free_Quantity']) if row['Free_Quantity'].is_integer() else "" if row['Free_Quantity'] == 0 else row['Free_Quantity']
+                qty_disp,
+                free_disp
             ])
             
-        table_data.append(['', '', 'TOTAL', '', total_qty, total_free])
+        # Total Row
+        table_data.append(['', '', Paragraph('TOTAL ITEMS', cell_style), '', 
+                           int(t_qty) if t_qty.is_integer() else t_qty, 
+                           int(t_free) if t_free.is_integer() else t_free])
         
-        t = Table(table_data, colWidths=[50, 80, 190, 60, 45, 55])
+        # Table Settings (Exact width match: Total 530)
+        t = Table(table_data, colWidths=[50, 85, 185, 65, 45, 55], repeatRows=1)
         t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2c3e50")), 
             ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
             ('ALIGN', (0,0), (-1,-1), 'CENTER'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,0), 9),
+            ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.whitesmoke, colors.white]),
+            ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+            ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
         ]))
         
         elements.append(t)
         doc.build(elements)
         
-        # 3. Download Button
-        st.success("Report Ready!")
+        # DOWNLOAD
+        st.success("PDF Generated Successfully!")
         st.download_button(
-            label="📩 Download PDF Report",
+            label="📩 DOWNLOAD PDF REPORT",
             data=buffer.getvalue(),
-            file_name=f"Order_Report_{datetime.now().strftime('%H%M%S')}.pdf",
+            file_name=f"Ferrite_Order_{datetime.now().strftime('%H%M%S')}.pdf",
             mime="application/pdf"
         )
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Something went wrong: {e}")
