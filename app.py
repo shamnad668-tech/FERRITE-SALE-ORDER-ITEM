@@ -6,7 +6,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- HELPER FUNCTIONS ---
 def extract_quantities(value):
@@ -66,8 +66,8 @@ if uploaded_file:
             fontSize=28, 
             alignment=TA_CENTER, 
             fontName='Helvetica-Bold', 
-            leading=34,       # Space for the line itself
-            spaceAfter=10     # Forced gap below the title
+            leading=34,       
+            spaceAfter=12     
         )
         
         sub_title_style = ParagraphStyle(
@@ -81,10 +81,14 @@ if uploaded_file:
         
         cell_style = ParagraphStyle('Cell', fontSize=9, leading=11, alignment=TA_LEFT)
         
+        # --- CORRECT TIME FOR INDIA (IST) ---
+        # Adjusting for UTC to IST (+5 hours 30 minutes)
+        ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
+        
         # Add Header
         elements.append(Paragraph("Ferrite Agencies", title_style))
         elements.append(Paragraph("Order Report", sub_title_style))
-        elements.append(Paragraph(f"Generated on: {datetime.now().strftime('%d-%m-%Y %I:%M %p')}", styles['Normal']))
+        elements.append(Paragraph(f"Generated on: {ist_time.strftime('%d-%m-%Y %I:%M %p')}", styles['Normal']))
         elements.append(Spacer(1, 20))
         
         # Table Data
@@ -112,18 +116,18 @@ if uploaded_file:
                            int(t_qty) if t_qty.is_integer() else t_qty, 
                            int(t_free) if t_free.is_integer() else t_free])
         
-        # FIXED COLUMN WIDTHS FOR AUTO-ALIGNMENT
+        # FIXED COLUMN WIDTHS & ALIGNMENT
         t = Table(table_data, colWidths=[50, 85, 185, 65, 45, 55], repeatRows=1)
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2c3e50")), 
             ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
             ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), # Keeps text centered vertically in the row
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), 
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
             ('FONTSIZE', (0,0), (-1,0), 9),
-            ('TOPPADDING', (0,0), (-1,-1), 5),    # Adds breathing room inside rows
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('TOPPADDING', (0,0), (-1,-1), 6),    
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
             ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.whitesmoke, colors.white]),
             ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
             ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
@@ -132,11 +136,11 @@ if uploaded_file:
         elements.append(t)
         doc.build(elements)
         
-        st.success("PDF Fixed & Generated!")
+        st.success(f"PDF Generated Successfully at {ist_time.strftime('%I:%M %p')} IST!")
         st.download_button(
-            label="📩 DOWNLOAD CORRECTED PDF",
+            label="📩 DOWNLOAD FINAL PDF REPORT",
             data=buffer.getvalue(),
-            file_name=f"Ferrite_Fixed_{datetime.now().strftime('%H%M%S')}.pdf",
+            file_name=f"Ferrite_Order_{ist_time.strftime('%H%M%S')}.pdf",
             mime="application/pdf"
         )
 
